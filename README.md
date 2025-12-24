@@ -58,3 +58,4 @@ High accuracy achieved using transfer learning
 This system helps automate brain tumor classification with explainable AI and an interactive web interface.
 
 👨‍💻 Developed by: Mahendra Pal
+Linkdin: 
