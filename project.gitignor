@@ -1,0 +1,15 @@
+# Python
+*.pyc
+__pycache__/
+
+# Models
+*.keras
+*.h5
+
+# History, reports
+history/
+reports/
+
+# Virtual environment
+venv/
+env/
