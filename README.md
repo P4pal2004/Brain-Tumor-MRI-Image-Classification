@@ -52,6 +52,19 @@ streamlit run app.py
 Best Model: InceptionV3
 
 High accuracy achieved using transfer learning
+https://drive.google.com/file/d/1D1L3Ou1W67GXmr_lyR3HG8fkJYWNBLAj/view?usp=drive_link
+## 🚀 Deployment Note
+
+Due to GitHub and Streamlit Cloud file size limitations, large deep learning models
+(ResNet50, InceptionV3) cannot be uploaded directly.
+
+Therefore:
+- The best-performing model (InceptionV3) is hosted on Google Drive
+- The Streamlit app dynamically downloads the model at runtime
+- This is a standard industry practice for deploying large ML models
+
+Local execution supports full model comparison and analysis.
+
 
 📌 Conclusion
 
