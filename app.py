@@ -154,6 +154,6 @@ elif page == "Model Comparison":
         for a in ax: a.legend()
         st.pyplot(fig)
 
-                )
-            )
+                
+            
 
