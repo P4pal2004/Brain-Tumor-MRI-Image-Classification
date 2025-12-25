@@ -1,24 +1,36 @@
 import streamlit as st
-from PIL import Image
+import os
+import cv2
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import tensorflow as tf
+
 from tensorflow.keras.models import load_model
 from sklearn.metrics import confusion_matrix, classification_report
 from PIL import Image
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
-st.set_page_config(page_title="Brain Tumor MRI Classification", layout="wide")
+# --------------------------------------------------
+# PAGE CONFIG
+# --------------------------------------------------
+st.set_page_config(
+    page_title="Brain Tumor MRI Classification",
+    layout="wide"
+)
 
-# ------------------ CONSTANTS ------------------
+# --------------------------------------------------
+# CONSTANTS
+# --------------------------------------------------
 IMG_SIZE = 224
 CLASSES = ["glioma", "meningioma", "pituitary", "no_tumor"]
+
 DATASET_PATH = "data/train"
 HISTORY_PATH = "history"
 REPORTS_PATH = "reports"
 
+# ALL MODELS ARE IN ROOT DIRECTORY
 MODELS = {
     "Baseline CNN": "cnn_baseline_best.keras",
     "MobileNetV2": "mobilenetv2_best.keras",
@@ -26,177 +38,216 @@ MODELS = {
     "InceptionV3": "inceptionv3_best.keras",
 }
 
-# ------------------ HELPERS ------------------
+# --------------------------------------------------
+# HELPER FUNCTIONS
+# --------------------------------------------------
 def preprocess_image(img):
-    img = cv2.cvtColor(np.array(img), cv2.COLOR_BGR2RGB)
+    img = np.array(img)
     img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
     img = img / 255.0
     return np.expand_dims(img, axis=0)
 
-def load_history(name):
-    path = os.path.join(HISTORY_PATH, f"{name}_history.npy")
-    return np.load(path, allow_pickle=True).item()
+
+def load_history_safe(model_key):
+    """Safely load history file (cloud-safe)."""
+    path = os.path.join(HISTORY_PATH, f"{model_key}_history.npy")
+    if os.path.exists(path):
+        return np.load(path, allow_pickle=True).item()
+    return None
+
 
 def get_best_model():
-    best_model, best_acc = None, 0
-    for name in MODELS:
-        hist = load_history(name.lower().replace(" ", "_"))
-        acc = max(hist["val_accuracy"])
-        if acc > best_acc:
-            best_acc = acc
-            best_model = name
-    return best_model, best_acc
+    """Select best model using validation accuracy if history exists."""
+    best_model = None
+    best_acc = 0
+
+    for name, path in MODELS.items():
+        key = name.lower().replace(" ", "_")
+        hist = load_history_safe(key)
+
+        if hist and "val_accuracy" in hist:
+            acc = max(hist["val_accuracy"])
+            if acc > best_acc:
+                best_acc = acc
+                best_model = name
+
+    # Fallback (Cloud-safe)
+    if best_model is None:
+        best_model = "ResNet50"
+
+    return best_model
+
 
 def visualize_augmentation(image, num_aug=4):
-    """
-    Generates and returns a list of augmented images.
-    """
     datagen = ImageDataGenerator(
         rotation_range=20,
+        zoom_range=0.1,
         width_shift_range=0.1,
         height_shift_range=0.1,
-        zoom_range=0.1,
         horizontal_flip=True,
-        fill_mode='nearest'
+        fill_mode="nearest"
     )
 
-    img_array = np.expand_dims(np.array(image), 0)  # (1, H, W, 3)
+    img_array = np.expand_dims(np.array(image), axis=0)
     aug_iter = datagen.flow(img_array, batch_size=1)
-    
-    augmented_images = []
-    for _ in range(num_aug):
-        aug_img = next(aug_iter)[0].astype(np.uint8)
-        augmented_images.append(aug_img)
-    return augmented_images
 
-# ------------------ SIDEBAR ------------------
+    return [next(aug_iter)[0].astype(np.uint8) for _ in range(num_aug)]
+
+
+# --------------------------------------------------
+# SIDEBAR
+# --------------------------------------------------
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", ["Prediction", "Dataset Overview", "Model Comparison"])
+page = st.sidebar.radio(
+    "Go to",
+    ["Prediction", "Dataset Overview", "Model Comparison"]
+)
 
-# ======================================================
-# 🔮 PREDICTION TAB (Top 3 predictions + model)
-# ======================================================
+# ==================================================
+# 🔮 PREDICTION TAB
+# ==================================================
 if page == "Prediction":
-    st.title("🧠 Brain Tumor Prediction (Top 3)")
+    st.title("🧠 Brain Tumor MRI Prediction")
 
-    uploaded_file = st.file_uploader("Upload MRI Image", type=["jpg", "png", "jpeg"])
+    uploaded_file = st.file_uploader(
+        "Upload MRI Image",
+        type=["jpg", "jpeg", "png"]
+    )
 
-    if uploaded_file is not None:
+    if uploaded_file:
         image = Image.open(uploaded_file).convert("RGB")
-        st.image(image, caption="Uploaded MRI", width=300)
 
-        img_array = preprocess_image(image)
-        # Load best model
-        best_model_name, _ = get_best_model()
-        model_path = MODELS[best_model_name]
-        model = load_model(model_path)
-        preds = model.predict(img_array)[0]
+        col1, col2 = st.columns([1, 1])
 
-        class_names = ["Glioma", "Meningioma", "Pituitary", "No Tumor"]
+        with col1:
+            st.image(image, caption="Uploaded MRI", width=350)
 
-        # Get top 3 predictions
-        top_indices = preds.argsort()[-3:][::-1]
+        with col2:
+            best_model_name = get_best_model()
+            model_path = MODELS[best_model_name]
 
-        st.markdown("---")
-        st.subheader("Prediction Result")
-        st.info(f"**Predicted Model Used:** {best_model_name}")
+            model = load_model(model_path)
+            img_array = preprocess_image(image)
+            preds = model.predict(img_array)[0]
 
-        for i, idx in enumerate(top_indices, start=1):
-            st.write(f"**Top {i}:** {class_names[idx]} — Confidence: {preds[idx]*100:.2f}%")
+            st.subheader("Prediction Result")
+            st.info(f"Model Used: **{best_model_name}**")
 
-# ======================================================
-# 📁 DATASET OVERVIEW (Table + Sample + Augmentation)
-# ======================================================
+            top_idx = preds.argsort()[-3:][::-1]
+            class_labels = ["Glioma", "Meningioma", "Pituitary", "No Tumor"]
+
+            for i, idx in enumerate(top_idx, 1):
+                st.write(
+                    f"**Top {i}: {class_labels[idx]}** "
+                    f"— {preds[idx]*100:.2f}%"
+                )
+
+# ==================================================
+# 📁 DATASET OVERVIEW
+# ==================================================
 elif page == "Dataset Overview":
     st.title("📁 Dataset Overview")
 
-    classes = sorted(os.listdir(DATASET_PATH))
-    table_data = []
+    if not os.path.exists(DATASET_PATH):
+        st.error("Dataset not found in Streamlit Cloud.")
+    else:
+        classes = sorted(os.listdir(DATASET_PATH))
+        col1, col2 = st.columns(2)
 
-    # Prepare table data
-    for cls in classes:
-        cls_path = os.path.join(DATASET_PATH, cls)
-        num_images = len(os.listdir(cls_path))
-        table_data.append({"Class": cls, "Total Images": num_images})
-
-    df = pd.DataFrame(table_data)
-
-    # Split dataframe for 2-column layout
-    col1, col2 = st.columns(2)
-    mid = len(df) // 2 + len(df) % 2
-
-    for col, data in zip([col1, col2], [df.iloc[:mid], df.iloc[mid:]]):
-        for _, row in data.iterrows():
-            cls = row["Class"]
-            num_images = row["Total Images"]
-            st.subheader(cls)
-            st.write(f"Total Images: {num_images}")
-
-            # Display a sample image
+        for i, cls in enumerate(classes):
             cls_path = os.path.join(DATASET_PATH, cls)
-            sample_img_path = os.path.join(cls_path, os.listdir(cls_path)[0])
-            img = Image.open(sample_img_path)
-            st.image(img, width=220, caption="Sample Image")
+            images = os.listdir(cls_path)
 
-            # Display augmented images below the sample
-            st.write("Augmented Samples:")
-            aug_images = visualize_augmentation(img, num_aug=4)
-            aug_cols = st.columns(len(aug_images))
-            for c, aug_img in zip(aug_cols, aug_images):
-                c.image(aug_img, width=150)
-            
-            st.markdown("---")  # Separator between classes
+            target_col = col1 if i % 2 == 0 else col2
 
-# ======================================================
-# 📈 MODEL COMPARISON (unchanged)
-# ======================================================
+            with target_col:
+                st.subheader(cls.capitalize())
+                st.write(f"Total Images: **{len(images)}**")
+
+                sample_img = Image.open(
+                    os.path.join(cls_path, images[0])
+                )
+                st.image(sample_img, width=230)
+
+                st.caption("Augmented Samples")
+                aug_imgs = visualize_augmentation(sample_img)
+
+                aug_cols = st.columns(len(aug_imgs))
+                for c, img in zip(aug_cols, aug_imgs):
+                    c.image(img, width=120)
+
+                st.markdown("---")
+
+# ==================================================
+# 📈 MODEL COMPARISON
+# ==================================================
 elif page == "Model Comparison":
     st.title("📈 Model Performance Comparison")
 
     histories = {}
     for name in MODELS:
         key = name.lower().replace(" ", "_")
-        histories[name] = load_history(key)
+        hist = load_history_safe(key)
+        if hist:
+            histories[name] = hist
 
-    # --------- ACCURACY & LOSS CURVES ----------
-    fig, ax = plt.subplots(1, 2, figsize=(14, 5))
-    for name, hist in histories.items():
-        ax[0].plot(hist["val_accuracy"], label=name)
-        ax[1].plot(hist["val_loss"], label=name)
+    if not histories:
+        st.warning("No training history found.")
+    else:
+        # Accuracy & Loss Curves
+        fig, ax = plt.subplots(1, 2, figsize=(14, 5))
 
-    ax[0].set_title("Validation Accuracy")
-    ax[1].set_title("Validation Loss")
-    for a in ax: a.legend()
-    st.pyplot(fig)
+        for name, hist in histories.items():
+            ax[0].plot(hist["val_accuracy"], label=name)
+            ax[1].plot(hist["val_loss"], label=name)
 
-    # --------- COMPARISON TABLE ----------
-    table = []
-    for name, hist in histories.items():
-        table.append({
-            "Model": name,
-            "Best Val Accuracy": max(hist["val_accuracy"]),
-            "Min Val Loss": min(hist["val_loss"])
-        })
+        ax[0].set_title("Validation Accuracy")
+        ax[1].set_title("Validation Loss")
+        for a in ax:
+            a.legend()
 
-    df = pd.DataFrame(table)
-    st.subheader("📊 Model Comparison Table")
-    st.dataframe(df, use_container_width=True)
+        st.pyplot(fig)
 
-    # --------- BAR CHART ----------
-    st.subheader("🏆 Accuracy Comparison")
-    st.bar_chart(df.set_index("Model")["Best Val Accuracy"])
+        # Comparison Table
+        table = []
+        for name, hist in histories.items():
+            table.append({
+                "Model": name,
+                "Best Val Accuracy": max(hist["val_accuracy"]),
+                "Min Val Loss": min(hist["val_loss"])
+            })
 
-    # --------- CONFUSION MATRIX ----------
-    st.subheader("🧩 Confusion Matrix (Best Model)")
-    y_true = np.load(os.path.join(REPORTS_PATH, "resnet_y_true.npy"))
-    y_pred = np.load(os.path.join(REPORTS_PATH, "resnet_y_pred.npy"))
+        df = pd.DataFrame(table)
+        st.subheader("📊 Comparison Table")
+        st.dataframe(df, use_container_width=True)
 
-    cm = confusion_matrix(y_true, y_pred)
-    fig, ax = plt.subplots(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt="d", xticklabels=CLASSES, yticklabels=CLASSES)
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    st.pyplot(fig)
+        st.subheader("🏆 Accuracy Comparison")
+        st.bar_chart(df.set_index("Model")["Best Val Accuracy"])
 
-    st.subheader("📄 Classification Report")
-    st.text(classification_report(y_true, y_pred, target_names=CLASSES))
+        # Confusion Matrix (Optional)
+        y_true_path = os.path.join(REPORTS_PATH, "resnet_y_true.npy")
+        y_pred_path = os.path.join(REPORTS_PATH, "resnet_y_pred.npy")
+
+        if os.path.exists(y_true_path) and os.path.exists(y_pred_path):
+            y_true = np.load(y_true_path)
+            y_pred = np.load(y_pred_path)
+
+            cm = confusion_matrix(y_true, y_pred)
+            fig, ax = plt.subplots(figsize=(6, 5))
+            sns.heatmap(
+                cm, annot=True, fmt="d",
+                xticklabels=CLASSES,
+                yticklabels=CLASSES
+            )
+            ax.set_xlabel("Predicted")
+            ax.set_ylabel("Actual")
+            st.pyplot(fig)
+
+            st.subheader("📄 Classification Report")
+            st.text(
+                classification_report(
+                    y_true, y_pred,
+                    target_names=CLASSES
+                )
+            )
+
